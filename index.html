@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPX Timeline</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
+        padding: 1.5rem 2rem;
+        background: #f8f9fa;
+        color: #212529;
+      }
+      h1 { margin-bottom: 1rem; font-size: 1.5rem; }
+
+      #controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin-bottom: 1rem;
+      }
+      button {
+        padding: 0.4rem 0.9rem;
+        cursor: pointer;
+        border: 1px solid #adb5bd;
+        border-radius: 4px;
+        background: #fff;
+        font-size: 0.9rem;
+      }
+      button:hover { background: #e9ecef; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      label { font-size: 0.9rem; }
+      input[type="date"] {
+        padding: 0.35rem 0.5rem;
+        border: 1px solid #adb5bd;
+        border-radius: 4px;
+        font-size: 0.9rem;
+      }
+
+      #status { margin-bottom: 0.5rem; font-size: 0.9rem; color: #495057; min-height: 1.2em; }
+
+      #progress-bar-wrap {
+        height: 4px;
+        background: #dee2e6;
+        border-radius: 2px;
+        margin-bottom: 0.75rem;
+        display: none;
+      }
+      #progress-bar {
+        height: 100%;
+        background: #495057;
+        border-radius: 2px;
+        width: 0%;
+        transition: width 0.1s ease;
+      }
+
+      #table-container { overflow-x: auto; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      th {
+        text-align: left;
+        padding: 0.6rem 0.8rem;
+        background: #e9ecef;
+        font-weight: 600;
+        white-space: nowrap;
+        border-bottom: 1px solid #dee2e6;
+      }
+      td {
+        padding: 0.5rem 0.8rem;
+        border-bottom: 1px solid #f1f3f5;
+        white-space: nowrap;
+      }
+      tr:last-child td { border-bottom: none; }
+      tr:hover td { background: #f8f9fa; }
+      .row-error td { color: #868e96; font-style: italic; }
+      .map-cell { width: 108px; padding: 3px 6px; vertical-align: middle; }
+      .track-canvas { display: block; border-radius: 3px; background: #f1f5f9; }
+
+      #empty-msg {
+        text-align: center;
+        padding: 2rem;
+        color: #868e96;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>GPX Timeline</h1>
+
+    <div id="controls">
+      <button id="btn-pick">Select Directory</button>
+      <label>Start: <input type="date" id="filter-start" /></label>
+      <label>End: <input type="date" id="filter-end" /></label>
+      <button id="btn-clear">Clear</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+
+    <div id="table-container">
+      <table id="activity-table">
+        <thead>
+          <tr>
+            <th>MAP</th>
+            <th>FILENAME</th>
+            <th>DATE RANGE</th>
+            <th>ACTIVITY TYPE</th>
+            <th>FILE SIZE</th>
+          </tr>
+        </thead>
+        <tbody id="activity-tbody"></tbody>
+      </table>
+      <div id="empty-msg">No matching files.</div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

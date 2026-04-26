@@ -48,8 +48,16 @@ export async function parseFit(file: File): Promise<ActivityFile> {
   if (errors?.length && !messages?.sessionMesgs?.length) return errorResult(file);
 
   const session = messages?.sessionMesgs?.[0];
+  const records = messages?.recordMesgs ?? [];
+
   const startTime: Date | null = session?.startTime instanceof Date ? session.startTime : null;
-  const endTime: Date | null   = session?.timestamp instanceof Date ? session.timestamp : null;
+
+  // session.timestamp is supposed to be end-of-session but is often missing;
+  // fall back to the last record's timestamp which is always present if GPS data exists.
+  const lastRecordTime = records.length > 0 ? records[records.length - 1].timestamp : undefined;
+  const endTime: Date | null =
+    session?.timestamp instanceof Date ? session.timestamp :
+    lastRecordTime instanceof Date     ? lastRecordTime    : null;
   const activityType           = typeof session?.sport === 'string' ? session.sport.toLowerCase() : 'unknown';
 
   const raw: TrackPoint[] = [];

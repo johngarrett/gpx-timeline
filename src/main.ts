@@ -2,12 +2,15 @@ import type { ActivityFile } from './types.js';
 import { parseGpx, parseFit } from './parser.js';
 import { cacheKey, getManyCached, putManyCached } from './db.js';
 import { drawTrack } from './map.js';
+import { geocodeActivities } from './geocode.js';
 
 const btnPick        = document.getElementById('btn-pick')          as HTMLButtonElement;
 const btnClear       = document.getElementById('btn-clear')         as HTMLButtonElement;
 const filterStart    = document.getElementById('filter-start')      as HTMLInputElement;
 const filterEnd      = document.getElementById('filter-end')        as HTMLInputElement;
+const filterCity     = document.getElementById('filter-city')       as HTMLSelectElement;
 const statusEl       = document.getElementById('status')            as HTMLDivElement;
+const geoStatusEl    = document.getElementById('geo-status')        as HTMLDivElement;
 const tbody          = document.getElementById('activity-tbody')    as HTMLTableSectionElement;
 const emptyMsg       = document.getElementById('empty-msg')         as HTMLDivElement;
 const progressWrap   = document.getElementById('progress-bar-wrap') as HTMLDivElement;
@@ -15,23 +18,19 @@ const progressBar    = document.getElementById('progress-bar')      as HTMLDivEl
 
 let allActivities: ActivityFile[] = [];
 
-// ── Canvas lazy-render via IntersectionObserver ──────────────────────────────
+// ── Canvas lazy-render ────────────────────────────────────────────────────────
 const pendingCanvases = new Map<HTMLCanvasElement, ActivityFile>();
-
 const canvasObserver = new IntersectionObserver(entries => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
     const canvas = entry.target as HTMLCanvasElement;
     const activity = pendingCanvases.get(canvas);
-    if (activity) {
-      drawTrack(canvas, activity.trackPoints);
-      pendingCanvases.delete(canvas);
-    }
+    if (activity) { drawTrack(canvas, activity.trackPoints); pendingCanvases.delete(canvas); }
     canvasObserver.unobserve(canvas);
   }
 }, { rootMargin: '200px 0px' });
 
-// ── Directory picker ─────────────────────────────────────────────────────────
+// ── Directory picker ──────────────────────────────────────────────────────────
 btnPick.addEventListener('click', () => {
   if ('showDirectoryPicker' in window) pickWithFSA(); else pickWithInput();
 });
@@ -46,7 +45,6 @@ async function pickWithFSA(): Promise<void> {
     setStatus(`Failed to open directory: ${String(err)}`);
     return;
   }
-
   btnPick.disabled = true;
   setStatus('Scanning…');
   try {
@@ -77,13 +75,14 @@ function pickWithInput(): void {
   input.click();
 }
 
-// ── Core processing ──────────────────────────────────────────────────────────
+// ── Core processing with cache ────────────────────────────────────────────────
 const BATCH_SIZE = 20;
 
 async function processFiles(files: File[]): Promise<void> {
   if (files.length === 0) {
     setStatus('No .gpx or .fit.gz files found in that directory.');
     allActivities = [];
+    resetCityFilter();
     render();
     return;
   }
@@ -94,19 +93,30 @@ async function processFiles(files: File[]): Promise<void> {
   setStatus(`Checking cache for ${total} file(s)…`);
   const cached = await getManyCached(keys);
 
-  const hits: ActivityFile[]  = [];
-  const missFiles: File[]     = [];
-  const missKeys: string[]    = [];
+  const hits: ActivityFile[] = [];
+  const missFiles: File[]    = [];
+  const missKeys: string[]   = [];
 
   for (let i = 0; i < files.length; i++) {
     const hit = cached.get(keys[i]);
-    if (hit) hits.push(hit); else { missFiles.push(files[i]); missKeys.push(keys[i]); }
+    if (hit) {
+      if (!hit._cacheKey) hit._cacheKey = keys[i]; // backfill old entries
+      hits.push(hit);
+    } else {
+      missFiles.push(files[i]);
+      missKeys.push(keys[i]);
+    }
   }
+
+  // Rebuild city filter from cached data before rendering
+  resetCityFilter();
+  for (const h of hits) { if (h.city) addCityOption(h.city); }
 
   if (missFiles.length === 0) {
     setStatus(`${total} file(s) loaded from cache.`);
     allActivities = sortByDate([...hits]);
     render();
+    startGeocoding(allActivities);
     return;
   }
 
@@ -126,49 +136,107 @@ async function processFiles(files: File[]): Promise<void> {
       const activity: ActivityFile = r.status === 'fulfilled'
         ? r.value
         : { filename: batch[j].name, startTime: null, endTime: null, activityType: 'parse error', fileSizeBytes: batch[j].size, trackPoints: [] };
+      activity._cacheKey = batchKeys[j];
       parsed.push(activity);
       if (r.status === 'fulfilled') toSave.push([batchKeys[j], activity]);
     }
 
-    // Persist to DB without blocking the parse loop
     putManyCached(toSave).catch(console.warn);
 
     const done = Math.min(i + BATCH_SIZE, missFiles.length);
-    const cacheNote = hits.length > 0 ? `${hits.length} cached · ` : '';
-    setStatus(`${cacheNote}parsing ${done} / ${missFiles.length} new…`);
+    const note  = hits.length > 0 ? `${hits.length} cached · ` : '';
+    setStatus(`${note}parsing ${done} / ${missFiles.length} new…`);
     setProgress(done / missFiles.length);
-
     await yieldToMain();
   }
 
   progressWrap.style.display = 'none';
   allActivities = sortByDate(parsed);
   render();
+  startGeocoding(allActivities);
 }
 
-function parseFile(file: File): Promise<ActivityFile> {
-  if (file.name.endsWith('.gpx'))    return parseGpx(file);
-  if (file.name.endsWith('.fit.gz')) return parseFit(file);
-  return Promise.reject(new Error(`Unrecognised extension: ${file.name}`));
+// ── Geocoding ─────────────────────────────────────────────────────────────────
+let geocodeRenderTimer: ReturnType<typeof setTimeout> | null = null;
+
+function startGeocoding(activities: ActivityFile[]): void {
+  const needGeo = activities.filter(a => a.city === undefined && a.trackPoints.length > 0);
+  if (needGeo.length === 0) { geoStatusEl.textContent = ''; return; }
+
+  geoStatusEl.textContent = `geocoding cities: 0 / ${needGeo.length}`;
+
+  geocodeActivities(
+    activities,
+    (activity, city) => {
+      activity.city = city;
+
+      // Update the city cell in the DOM directly (no re-render needed)
+      if (activity._cacheKey) {
+        const td = tbody.querySelector(`td[data-ckey="${CSS.escape(activity._cacheKey)}"]`) as HTMLTableCellElement | null;
+        if (td) td.textContent = city || '—';
+      }
+
+      // Add to the cities dropdown
+      if (city) addCityOption(city);
+
+      // Persist updated entry to DB
+      if (activity._cacheKey) {
+        putManyCached([[activity._cacheKey, activity]]).catch(console.warn);
+      }
+
+      // Debounced re-render so city filter reflects new data
+      if (geocodeRenderTimer) clearTimeout(geocodeRenderTimer);
+      geocodeRenderTimer = setTimeout(render, 1000);
+    },
+    (done, total) => {
+      geoStatusEl.textContent = `geocoding cities: ${done} / ${total}`;
+      if (done === total) {
+        geoStatusEl.textContent = '';
+        render(); // final render to apply any active city filter
+      }
+    },
+  );
 }
 
-function sortByDate(activities: ActivityFile[]): ActivityFile[] {
-  return activities.sort((a, b) => {
-    if (!a.startTime && !b.startTime) return 0;
-    if (!a.startTime) return 1;
-    if (!b.startTime) return -1;
-    return b.startTime.getTime() - a.startTime.getTime();
-  });
+// ── City filter helpers ───────────────────────────────────────────────────────
+function resetCityFilter(): void {
+  const prev = filterCity.value;
+  filterCity.innerHTML = '<option value="">All cities</option>';
+  // Re-select previous value if it still exists (it won't, but good practice)
+  filterCity.value = prev === '' ? '' : '';
 }
 
-// ── Filters ──────────────────────────────────────────────────────────────────
+function addCityOption(city: string): void {
+  if (!city) return;
+  for (const opt of filterCity.options) {
+    if (opt.value === city) return;
+  }
+  const opt = Object.assign(document.createElement('option'), { value: city, textContent: city });
+  // Insert in sorted order after the first "All cities" option
+  let inserted = false;
+  for (let i = 1; i < filterCity.options.length; i++) {
+    if ((filterCity.options[i].value ?? '') > city) {
+      filterCity.insertBefore(opt, filterCity.options[i]);
+      inserted = true;
+      break;
+    }
+  }
+  if (!inserted) filterCity.appendChild(opt);
+}
+
+// ── Filters ───────────────────────────────────────────────────────────────────
 filterStart.addEventListener('input', render);
 filterEnd.addEventListener('input', render);
-btnClear.addEventListener('click', () => { filterStart.value = ''; filterEnd.value = ''; render(); });
+filterCity.addEventListener('change', render);
+btnClear.addEventListener('click', () => {
+  filterStart.value = '';
+  filterEnd.value   = '';
+  filterCity.value  = '';
+  render();
+});
 
-// ── Render ───────────────────────────────────────────────────────────────────
+// ── Render ────────────────────────────────────────────────────────────────────
 function render(): void {
-  // Reset canvas observer before rebuilding rows
   canvasObserver.disconnect();
   pendingCanvases.clear();
 
@@ -176,11 +244,12 @@ function render(): void {
   const endFilter   = filterEnd.value
     ? (() => { const d = new Date(filterEnd.value); d.setDate(d.getDate() + 1); return d; })()
     : null;
+  const cityFilter  = filterCity.value;
 
   const visible = allActivities.filter(a => {
-    if (!a.startTime) return true;
-    if (startFilter && a.startTime < startFilter) return false;
-    if (endFilter   && a.startTime >= endFilter)  return false;
+    if (startFilter && a.startTime && a.startTime < startFilter) return false;
+    if (endFilter   && a.startTime && a.startTime >= endFilter)  return false;
+    if (cityFilter  && a.city !== cityFilter)                    return false;
     return true;
   });
 
@@ -198,13 +267,12 @@ function render(): void {
     const tr = document.createElement('tr');
     if (activity.activityType === 'parse error') tr.classList.add('row-error');
 
-    // Map canvas cell
+    // Map canvas
     const mapTd = document.createElement('td');
     mapTd.className = 'map-cell';
     if (activity.trackPoints.length >= 2) {
       const canvas = document.createElement('canvas');
-      canvas.width  = 100;
-      canvas.height = 52;
+      canvas.width = 100; canvas.height = 52;
       canvas.className = 'track-canvas';
       pendingCanvases.set(canvas, activity);
       canvasObserver.observe(canvas);
@@ -217,13 +285,35 @@ function render(): void {
     tr.appendChild(cell(activity.filename));
     tr.appendChild(cell(formatDateRange(activity.startTime, activity.endTime)));
     tr.appendChild(cell(activity.activityType));
+
+    // City cell — carries data-ckey so geocode results can update it in-place
+    const cityTd = document.createElement('td');
+    cityTd.dataset.ckey = activity._cacheKey ?? '';
+    cityTd.textContent = activity.city === undefined ? '…' : (activity.city || '—');
+    tr.appendChild(cityTd);
+
     tr.appendChild(cell(formatBytes(activity.fileSizeBytes)));
     fragment.appendChild(tr);
   }
   tbody.appendChild(fragment);
 }
 
-// ── Formatting ───────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function parseFile(file: File): Promise<ActivityFile> {
+  if (file.name.endsWith('.gpx'))    return parseGpx(file);
+  if (file.name.endsWith('.fit.gz')) return parseFit(file);
+  return Promise.reject(new Error(`Unrecognised extension: ${file.name}`));
+}
+
+function sortByDate(activities: ActivityFile[]): ActivityFile[] {
+  return activities.sort((a, b) => {
+    if (!a.startTime && !b.startTime) return 0;
+    if (!a.startTime) return 1;
+    if (!b.startTime) return -1;
+    return b.startTime.getTime() - a.startTime.getTime();
+  });
+}
+
 const dtFmt = new Intl.DateTimeFormat('en-US', {
   month: 'short', day: 'numeric', year: 'numeric',
   hour: 'numeric', minute: '2-digit', hour12: true,

@@ -5,12 +5,50 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GPX Timeline</title>
     <style>
+      :root {
+        --bg:             #f8f9fa;
+        --fg:             #212529;
+        --surface:        #ffffff;
+        --surface-hover:  #f8f9fa;
+        --border:         #dee2e6;
+        --border-subtle:  #f1f3f5;
+        --muted:          #868e96;
+        --ctrl-bg:        #ffffff;
+        --ctrl-border:    #adb5bd;
+        --th-bg:          #e9ecef;
+        --btn-hover:      #e9ecef;
+        --status-fg:      #495057;
+        --progress-track: #dee2e6;
+        --progress-fill:  #495057;
+        --canvas-bg:      #f1f5f9;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg:             #18181b;
+          --fg:             #f4f4f5;
+          --surface:        #27272a;
+          --surface-hover:  #3f3f46;
+          --border:         #3f3f46;
+          --border-subtle:  #2d2d30;
+          --muted:          #a1a1aa;
+          --ctrl-bg:        #27272a;
+          --ctrl-border:    #52525b;
+          --th-bg:          #3f3f46;
+          --btn-hover:      #52525b;
+          --status-fg:      #a1a1aa;
+          --progress-track: #3f3f46;
+          --progress-fill:  #a1a1aa;
+          --canvas-bg:      #1e1e22;
+        }
+      }
+
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       body {
         font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
         padding: 1.5rem 2rem;
-        background: #f8f9fa;
-        color: #212529;
+        background: var(--bg);
+        color: var(--fg);
       }
       h1 { margin-bottom: 1rem; font-size: 1.5rem; }
 
@@ -24,33 +62,39 @@
       button {
         padding: 0.4rem 0.9rem;
         cursor: pointer;
-        border: 1px solid #adb5bd;
+        border: 1px solid var(--ctrl-border);
         border-radius: 4px;
-        background: #fff;
+        background: var(--ctrl-bg);
+        color: var(--fg);
         font-size: 0.9rem;
+        font-family: inherit;
       }
-      button:hover { background: #e9ecef; }
+      button:hover { background: var(--btn-hover); }
       button:disabled { opacity: 0.5; cursor: default; }
       label { font-size: 0.9rem; }
-      input[type="date"] {
+      input[type="date"], select {
         padding: 0.35rem 0.5rem;
-        border: 1px solid #adb5bd;
+        border: 1px solid var(--ctrl-border);
         border-radius: 4px;
         font-size: 0.9rem;
+        font-family: inherit;
+        background: var(--ctrl-bg);
+        color: var(--fg);
       }
 
-      #status { margin-bottom: 0.5rem; font-size: 0.9rem; color: #495057; min-height: 1.2em; }
+      #status     { font-size: 0.9rem; color: var(--status-fg); min-height: 1.2em; }
+      #geo-status { font-size: 0.8rem; color: var(--muted); min-height: 1.1em; margin-bottom: 0.5rem; }
 
       #progress-bar-wrap {
         height: 4px;
-        background: #dee2e6;
+        background: var(--progress-track);
         border-radius: 2px;
-        margin-bottom: 0.75rem;
+        margin: 0.4rem 0 0.75rem;
         display: none;
       }
       #progress-bar {
         height: 100%;
-        background: #495057;
+        background: var(--progress-fill);
         border-radius: 2px;
         width: 0%;
         transition: width 0.1s ease;
@@ -61,34 +105,35 @@
         width: 100%;
         border-collapse: collapse;
         font-size: 0.875rem;
-        background: #fff;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        background: var(--surface);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
         border-radius: 6px;
         overflow: hidden;
       }
       th {
         text-align: left;
         padding: 0.6rem 0.8rem;
-        background: #e9ecef;
+        background: var(--th-bg);
+        color: var(--fg);
         font-weight: 600;
         white-space: nowrap;
-        border-bottom: 1px solid #dee2e6;
+        border-bottom: 1px solid var(--border);
       }
       td {
         padding: 0.5rem 0.8rem;
-        border-bottom: 1px solid #f1f3f5;
+        border-bottom: 1px solid var(--border-subtle);
         white-space: nowrap;
       }
       tr:last-child td { border-bottom: none; }
-      tr:hover td { background: #f8f9fa; }
-      .row-error td { color: #868e96; font-style: italic; }
+      tr:hover td { background: var(--surface-hover); }
+      .row-error td { color: var(--muted); font-style: italic; }
       .map-cell { width: 108px; padding: 3px 6px; vertical-align: middle; }
-      .track-canvas { display: block; border-radius: 3px; background: #f1f5f9; }
+      .track-canvas { display: block; border-radius: 3px; background: var(--canvas-bg); }
 
       #empty-msg {
         text-align: center;
         padding: 2rem;
-        color: #868e96;
+        color: var(--muted);
         display: none;
       }
     </style>
@@ -100,10 +145,16 @@
       <button id="btn-pick">Select Directory</button>
       <label>Start: <input type="date" id="filter-start" /></label>
       <label>End: <input type="date" id="filter-end" /></label>
+      <label>City:
+        <select id="filter-city">
+          <option value="">All cities</option>
+        </select>
+      </label>
       <button id="btn-clear">Clear</button>
     </div>
 
     <div id="status"></div>
+    <div id="geo-status"></div>
     <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
 
     <div id="table-container">
@@ -114,6 +165,7 @@
             <th>FILENAME</th>
             <th>DATE RANGE</th>
             <th>ACTIVITY TYPE</th>
+            <th>CITY</th>
             <th>FILE SIZE</th>
           </tr>
         </thead>

@@ -35,8 +35,10 @@ export function drawTrack(canvas: HTMLCanvasElement, points: TrackPoint[]): void
   const offX = pad + (drawW - physW) / 2;
   const offY = pad + (drawH - physH) / 2;
 
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
   ctx.clearRect(0, 0, W, H);
-  ctx.strokeStyle = '#2563eb';
+  ctx.strokeStyle = dark ? '#60a5fa' : '#2563eb';
   ctx.lineWidth = 1.5;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
@@ -52,7 +54,7 @@ export function drawTrack(canvas: HTMLCanvasElement, points: TrackPoint[]): void
   // Green dot at start
   const x0 = offX + (points[0].lon - minLon) * cosLat * scale;
   const y0 = offY + physH - (points[0].lat - minLat) * scale;
-  ctx.fillStyle = '#16a34a';
+  ctx.fillStyle = dark ? '#4ade80' : '#16a34a';
   ctx.beginPath();
   ctx.arc(x0, y0, 2.5, 0, Math.PI * 2);
   ctx.fill();
